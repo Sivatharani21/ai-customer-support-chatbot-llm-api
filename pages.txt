@@ -1,0 +1,37 @@
+B2B Customer Support Chatbot - Screens & Pages
+================================================
+
+1. Main Chat Page (app.py)
+   - Entry point of the application
+   - Chat interface for users to describe their support issues
+   - Sends messages to the backend and displays bot responses
+   - Shows Ticket ID in chat when a ticket is successfully created
+   - Sidebar contains:
+       * Session ID display
+       * "View All Tickets" button → navigates to Tickets List page
+       * "View Conversation History" button → shows chat logs for current session
+       * "New Session" button → resets session and clears chat
+
+2. Tickets List Page (pages/1_Tickets.py)
+   - Displays all support tickets from the database
+   - Each ticket row shows:
+       * Ticket ID
+       * Intent (e.g. Order Management, Invoice Query)
+       * Created Date
+       * Status (Open / Closed) with color indicator
+   - "View Details" button on each row → navigates to Ticket Detail page
+
+3. Ticket Detail Page (pages/2_Ticket_Detail.py)
+   - Displays full details of a selected ticket
+   - Shows:
+       * Ticket ID
+       * Status
+       * Intent
+       * Session ID
+       * Order Number
+       * Product
+       * Quantity
+       * Invoice Number
+       * Description
+       * Created At (timestamp)
+   - "Back to Tickets" button → navigates back to Tickets List page

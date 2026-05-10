@@ -1,0 +1,318 @@
+B2B AI Customer Support Chatbot - Full Product Detail
+=======================================================
+
+OVERVIEW
+--------
+This is an AI-powered B2B customer support chatbot system built for businesses to handle
+customer support queries automatically. It uses a Large Language Model (LLM) to understand
+what the customer wants, extract relevant information, ask follow-up questions if anything
+is missing, and then automatically create a support ticket — all through a conversational
+chat interface.
+
+The system is split into two parts:
+  - Backend  : A FastAPI REST API that handles all logic, AI processing, and database storage
+  - Frontend : A Streamlit web application that provides the chat interface and ticket views
+
+
+=======================================================
+TECH STACK
+=======================================================
+
+  Layer             | Technology
+  ------------------|--------------------------------------------
+  Frontend UI       | Streamlit
+  Backend API       | FastAPI + Uvicorn
+  AI / LLM          | OpenAI GPT-4o-mini via LangChain
+  AI Orchestration  | LangGraph (stateful AI workflow graph)
+  Database          | SQLite (via SQLAlchemy ORM)
+  Data Validation   | Pydantic v2
+  Environment       | Python 3.11, python-dotenv
+
+
+=======================================================
+HOW IT WORKS — END TO END FLOW
+=======================================================
+
+1. User opens the Streamlit chat page and types a support message.
+   Example: "My order is not delivered"
+
+2. The frontend sends the message and a session_id to the backend POST /chat endpoint.
+
+3. The backend runs the message through a LangGraph workflow with these steps:
+
+   Step 1 — CLASSIFY INTENT
+   -------------------------
+   The LLM reads the message and classifies it into one of 4 intents:
+     - order_management    → User has an issue with an order
+     - quotation_request   → User wants a price quote
+     - invoice_query       → User has a question about an invoice
+     - other_support       → Any other support request
+
+   Step 2 — EXTRACT ENTITIES
+   --------------------------
+   The LLM extracts structured data from the message into fields:
+     - order_number   (e.g. CA54321)
+     - product        (e.g. "Steel Pipes")
+     - quantity       (e.g. 100)
+     - invoice_number (e.g. INV-001)
+     - description    (free text description of the issue)
+
+   Step 3 — CHECK MISSING FIELDS
+   ------------------------------
+   The system checks if all required fields for the detected intent are present.
+   Required fields per intent:
+     - order_management   → order_number (must start with "CA")
+     - quotation_request  → product, quantity
+     - invoice_query      → invoice_number
+     - other_support      → description
+
+   If the order_number does not start with "CA", it is treated as missing/invalid.
+
+   Step 4a — FOLLOW-UP (if fields are missing)
+   --------------------------------------------
+   If any required field is missing, the LLM generates a natural, friendly follow-up
+   question asking the user to provide the missing information.
+   Example: "Could you please provide your order number? It should start with CA."
+
+   The conversation continues until all required fields are collected.
+   Each follow-up reply is merged with previously collected entities so the user
+   does not need to repeat information already given.
+
+   Step 4b — GENERATE TICKET (if all fields are present)
+   -------------------------------------------------------
+   Once all required fields are collected, a support ticket is automatically created
+   and saved to the database with:
+     - A unique Ticket ID (format: TKT-XXXXXXXX)
+     - Session ID
+     - Intent
+     - All extracted entity fields
+     - Status: "open"
+     - Created timestamp
+
+4. The backend saves the conversation log (query + response) to the database.
+
+5. The backend returns the response and ticket ID (if created) to the frontend.
+
+6. The frontend displays the bot reply and shows the Ticket ID in the chat if a ticket
+   was created.
+
+
+=======================================================
+BACKEND — FILE BY FILE
+=======================================================
+
+main.py
+-------
+  - Entry point for the FastAPI application
+  - Loads environment variables from .env
+  - Initialises the SQLite database tables on startup
+  - Registers all API routes
+
+backend/api/routes.py
+---------------------
+  Exposes the following REST API endpoints:
+
+  POST /chat
+    - Accepts: { message, session_id }
+    - Runs the LangGraph chatbot workflow
+    - Saves conversation log to DB
+    - Saves ticket to DB if one was generated
+    - Returns: { session_id, response, intent, ticket_id }
+
+  GET /sessions
+    - Returns all unique session IDs from conversation logs
+    - Each entry includes session_id and last_active timestamp
+    - Ordered by most recent activity first
+
+  GET /tickets
+    - Returns all support tickets from the database
+    - Ordered by newest first
+    - Returns full ticket details for each
+
+  GET /tickets/{ticket_id}
+    - Returns full details of a single ticket by its Ticket ID
+    - Returns 404 if not found
+
+  GET /history
+    - Accepts: session_id as query parameter
+    - Returns all conversation logs for that session in order
+
+backend/api/schemas.py
+----------------------
+  Pydantic models for request/response validation:
+    - ChatRequest         : message + session_id
+    - ChatResponse        : session_id, response, intent, ticket_id
+    - TicketCreate        : all ticket fields (used internally)
+    - TicketResponse      : TicketCreate + ticket_id, status, created_at
+    - ConversationLogResponse : session_id, query, response, timestamp
+    - HistoryResponse     : session_id + list of ConversationLogResponse
+
+backend/core/llm.py
+-------------------
+  - Initialises the OpenAI GPT-4o-mini model via LangChain's ChatOpenAI
+  - Model and API key are loaded from environment variables
+  - Temperature is set to 0 for consistent, deterministic responses
+
+backend/core/intent_classifier.py
+----------------------------------
+  - Uses an LLM prompt to classify the user's query into one of 4 intents
+  - Returns a lowercase intent string
+
+backend/core/entity_extractor.py
+---------------------------------
+  - Uses an LLM prompt to extract structured fields from the user's message
+  - Returns an ExtractedEntities Pydantic model with optional fields:
+    product, quantity, order_number, invoice_number, description
+
+backend/core/conversation_manager.py
+--------------------------------------
+  - Defines required fields per intent in REQUIRED_FIELDS_BY_INTENT
+  - Defines field validators in FIELD_VALIDATORS
+    (e.g. order_number must start with "CA")
+  - get_missing_fields() checks which required fields are absent or invalid
+  - generate_followup() uses the LLM to produce a natural follow-up question
+
+backend/core/chatbot.py
+------------------------
+  - Builds the LangGraph stateful workflow graph
+  - Nodes: classify → extract → check_missing → followup OR generate_ticket
+  - extract_node merges new entities into existing state (so follow-up answers
+    accumulate across multiple messages in the same session)
+  - route_after_check() decides whether to ask a follow-up or create a ticket
+
+backend/core/ticket_generator.py
+----------------------------------
+  - generate_ticket() maps extracted entities into a TicketCreate schema object
+  - generate_ticket_id() creates a unique ID in the format TKT-XXXXXXXX
+
+backend/db/database.py
+-----------------------
+  - Configures SQLite database connection using SQLAlchemy
+  - DATABASE_URL points to support_chatbot.db in the project root
+  - init_db() creates all tables on startup
+  - get_db() provides a database session per request (dependency injection)
+
+backend/db/models.py
+---------------------
+  Two database tables:
+
+  Ticket
+    - id, ticket_id (unique), session_id, intent
+    - product, quantity, order_id, invoice_number, description
+    - status (default: "open")
+    - created_at (auto timestamp)
+
+  ConversationLog
+    - id, session_id, query, response
+    - timestamp (auto timestamp)
+
+
+=======================================================
+FRONTEND — FILE BY FILE
+=======================================================
+
+frontend/app.py  (Main Chat Page)
+-----------------------------------
+  - Chat interface where users type support messages
+  - Maintains session_id in Streamlit session state
+  - Sends messages to POST /chat and displays responses
+  - Shows Ticket ID in chat when a ticket is created
+  - Sidebar features:
+      * Current session ID display
+      * Past Sessions dropdown — lists all previous sessions with last active time
+      * "Continue Session" button — loads selected session's full chat history
+        and switches the active session so new messages continue under it
+      * "View All Tickets" button — navigates to the Tickets List page
+      * "View Conversation History" button — shows full chat log for current session
+      * "New Session" button — starts a fresh session with a new UUID
+
+frontend/pages/1_Tickets.py  (Tickets List Page)
+--------------------------------------------------
+  - Fetches and displays all tickets from GET /tickets
+  - Each ticket row shows:
+      * Ticket ID
+      * Intent (human-readable, e.g. "Order Management")
+      * Created date
+      * Status with colour indicator (🟢 Open / 🔴 Closed)
+  - "View Details" button on each row navigates to the Ticket Detail page
+
+frontend/pages/2_Ticket_Detail.py  (Ticket Detail Page)
+---------------------------------------------------------
+  - Displays full information for a selected ticket
+  - Shows: Ticket ID, Status, Intent, Session ID, Order Number,
+    Product, Quantity, Invoice Number, Description, Created At
+  - "Back to Tickets" button returns to the Tickets List page
+
+
+=======================================================
+DATABASE
+=======================================================
+
+File: support_chatbot.db (SQLite, auto-created on first run)
+
+Tables:
+  tickets
+    - Stores all generated support tickets
+    - One row per ticket
+
+  conversation_logs
+    - Stores every message exchange (user query + bot response)
+    - Multiple rows per session
+
+
+=======================================================
+ENVIRONMENT VARIABLES (.env)
+=======================================================
+
+  OPENAI_API_KEY   — Your OpenAI API key (required)
+  LLM_MODEL        — Model name (default: gpt-4o-mini)
+  BACKEND_URL      — Backend URL for frontend (default: http://localhost:8000)
+
+
+=======================================================
+HOW TO RUN
+=======================================================
+
+1. Install dependencies:
+     pip install -r requirements.txt
+
+2. Create a .env file in the project root:
+     OPENAI_API_KEY=your_openai_api_key_here
+
+3. Start the backend:
+     uvicorn main:app --reload
+
+4. Start the frontend (from the frontend/ directory):
+     cd frontend
+     streamlit run app.py
+
+5. Open browser at http://localhost:8501
+
+
+=======================================================
+SUPPORTED INTENTS & REQUIRED FIELDS SUMMARY
+=======================================================
+
+  Intent               | Required Fields          | Validation
+  ---------------------|--------------------------|---------------------------
+  order_management     | order_number             | Must start with "CA"
+  quotation_request    | product, quantity        | None
+  invoice_query        | invoice_number           | None
+  other_support        | description              | None
+
+
+=======================================================
+KEY FEATURES SUMMARY
+=======================================================
+
+  - Natural language understanding via GPT-4o-mini
+  - Automatic intent classification (4 categories)
+  - Structured entity extraction from free-text messages
+  - Field validation (e.g. order number format enforcement)
+  - Multi-turn conversation with follow-up questions for missing data
+  - Entity accumulation across follow-up turns (no need to repeat info)
+  - Automatic ticket creation with unique Ticket IDs
+  - Full conversation history stored per session
+  - Session management — resume any past session from the sidebar
+  - Ticket list and detail views in the UI
+  - REST API backend (fully usable independently of the frontend)
